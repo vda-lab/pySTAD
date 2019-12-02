@@ -1,4 +1,4 @@
-# pSTAD - Python implementation of Simplified Topological Approximation of Data
+# pySTAD - Python implementation of Simplified Topological Approximation of Data
 
 ## Example script
 ```python
