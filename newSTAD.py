@@ -29,25 +29,19 @@ def load_data(dataset):
         values = data[['x','y','z']].values.tolist()
         x_min = min(data['x'])
         x_max = max(data['x'])
-        xs = data['x'].values
-        ys = data['y'].values
         # zs = data['z'].values
         colours = data['x'].map(lambda x:normalise_number_between_0_and_255(x, x_min, x_max)).values
-        return(values, xs, ys, colours)
+        return(values, colours)
     elif dataset == 'simulated':
         data = pd.read_csv('data/sim.csv', header=0)
         values = data[['x','y']]
-        xs = data['x'].values
-        ys = data['y'].values
         colours = np.zeros(1)
-        return(values, xs, ys, colours)
+        return(values, colours)
     elif dataset == 'circles':
         data = pd.read_csv('data/five_circles.csv', header=0)
         values = data[['x','y']].values.tolist()
-        xs = data['x'].values
-        ys = data['y'].values
         colours = list(data['hue'].map(lambda x:hex_to_number(x)))
-        return(values, xs, ys, colours)
+        return(values, colours)
     else:
         print("Dataset not known")
 
@@ -67,10 +61,8 @@ def matrix_to_all_combinations(matrix):
             if ( j > i ):
                 yield [i,j]
 
-def create_mst(dist_matrix, xs, ys, colours):
+def create_mst(dist_matrix, colours):
     complete_graph = ig.Graph.Full(len(dist_matrix[0]))
-    complete_graph.vs["x"] = xs
-    complete_graph.vs["y"] = ys
     complete_graph.vs["colour"] = colours
     complete_graph.es["distance"] = list(matrix_to_topright_array(dist_matrix))
     return complete_graph.spanning_tree(weights = list(matrix_to_topright_array(dist_matrix)))
@@ -78,7 +70,7 @@ def create_mst(dist_matrix, xs, ys, colours):
 ## Draw the graph
 def create_vega_nodes(graph):
     for v in graph.vs():
-        yield({"name": v.index, "x": v.attributes()['x'], "y": v.attributes()['y'], "colour": v.attributes()['colour']})
+        yield({"name": v.index, "colour": v.attributes()['colour']})
 
 def create_vega_links(graph):
     for e in graph.es():
@@ -86,10 +78,10 @@ def create_vega_links(graph):
 
 def create_gephi_files(graph, filename):
     with open(filename + '_nodes.csv', 'w') as f:
-        f.write("x\ty\tcolour\n")
+        f.write("colour\n")
         counter = 0
         for v in graph.vs():
-            f.write(str(v.attributes()['x']) + "\t" + str(v.attributes()['y']) + "\t" + str(v.attributes()['colour']) + "\n")
+            f.write(str(v.attributes()['colour']) + "\n")
             counter += 1
     with open(filename + '_edges.csv', 'w') as f:
         f.write("source\ttarget\tvalue\n")
@@ -201,8 +193,7 @@ def draw_stad(dataset, graph):
 
               "encode": {
                 "enter": {
-                  "fill": {"field": "colour", "scale": "colour"},
-                  "tooltip": {"field": "x"}
+                  "fill": {"field": "colour", "scale": "colour"}
                 },
                 "update": {
                   "size": {"value": 50},
@@ -350,11 +341,11 @@ def run_basinhopping(cf, mst, links_to_add, highD_dist_matrix, debug = False):
     return g
 
 ## Bringing everything together
-def run_stad(values, xs, ys, colours, debug=False):
+def run_stad(values, colours, debug=False):
     if debug: print("Calculating highD distance matrix")
     highD_dist_matrix = calculate_highD_dist_matrix(values)
     if debug: print("Calculating MST")
-    mst = create_mst(highD_dist_matrix, xs, ys, colours)
+    mst = create_mst(highD_dist_matrix, colours)
     if debug: print("Creating list of all links")
     all_links = create_list_of_all_links_with_values(highD_dist_matrix)
     if debug: print("Removing MST links and sorting")
@@ -372,8 +363,8 @@ def main():
     dataset = 'circles'
     # dataset = 'horse'
     # dataset = 'simulated'
-    values, xs, ys, colours = load_data(dataset)
-    g = run_stad(values, xs, ys, colours, debug=True)
+    values, colours = load_data(dataset)
+    g = run_stad(values, colours, debug=True)
     draw_stad(dataset, g)
     # create_gephi_files(g, dataset)
 
