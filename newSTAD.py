@@ -56,7 +56,7 @@ def matrix_to_topright_array(matrix):
                 yield value
 
 def matrix_to_all_combinations(matrix):
-    for i, vector in enumerate(highD_dist_matrix):
+    for i, vector in enumerate(matrix):
         for j, value in enumerate(vector):
             if ( j > i ):
                 yield [i,j]
