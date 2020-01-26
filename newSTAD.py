@@ -291,12 +291,38 @@ def create_list_of_all_links_with_values(highD_dist_matrix):
 ## Remove links that are already in MST
 def create_list_of_links_to_add(list_of_links, graph):
     '''
-    This removes all MST links and sorts all based on distance
+    This (1) removes all MST links and
+         (2) sorts all based on distance.
+    IMPORTANT!!
+    Possible links are sorted according to their distance in the original
+    high-dimensional space, and _NOT_ based on the error in the distances
+    between the high-dimensional space and the MST.
+    Example: below is the dataset from data/sim.csv, with the MST indicated.
+    If we sort by the _error_, then the first link that will be added is
+    between the points indicated with an 'o'. If we sort by distance in the
+    original high-D space, the first link that will be added is between the
+    points that are indicated with a 'v'.
+
+                *--*--*--*
+                |        |
+          *--o  *        *
+          |     |        |
+          *     *        *
+          |     |        |
+    *--*--*--v  v  o--*--*
+       |        |
+       *        *
+       |        |
+       *--*--*--*
+
     '''
+
     output = deepcopy(list_of_links)
+    ## Remove the links that are already in the MST
     for e in graph.es():
         elements = list(filter(lambda x:x['to'] == e.target and x['from'] == e.source, list_of_links))
         output.remove(elements[0])
+    ## Sort the links based on distance in original space
     output.sort(key = lambda x: x['highDd']) ## IMPORTANT!
     return output
 
