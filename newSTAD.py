@@ -56,7 +56,7 @@ def matrix_to_topright_array(matrix):
                 yield value
 
 def matrix_to_all_combinations(matrix):
-    for i, vector in enumerate(highD_dist_matrix):
+    for i, vector in enumerate(matrix):
         for j, value in enumerate(vector):
             if ( j > i ):
                 yield [i,j]
@@ -299,9 +299,16 @@ def create_list_of_links_to_add(list_of_links, graph):
     between the high-dimensional space and the MST.
     Example: below is the dataset from data/sim.csv, with the MST indicated.
     If we sort by the _error_, then the first link that will be added is
+<<<<<<< HEAD
     between the points indicated with an 'o'. If we sort by distance in the
     original high-D space, the first link that will be added is between the
     points that are indicated with a 'v'.
+=======
+    between the points indicated with an 'o' (because they lie at the opposite
+    ends of the MST). If we sort by distance in the original high-D space, the
+    first link that will be added is between the points that are indicated
+    with a 'v'.
+>>>>>>> lens
 
                 *--*--*--*
                 |        |
