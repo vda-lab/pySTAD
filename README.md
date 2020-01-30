@@ -1,5 +1,8 @@
 # pySTAD - Python implementation of Simplified Topological Abstraction of Data
 
+## Installation
+`pip install stad`
+
 ## Usage
 The input to `stad` is a _normalised distance matrix_ (i.e. with values between 0 and 1). Optionally, you can also provide an array of values for each datapoint that can be used in the lens.
 
