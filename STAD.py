@@ -9,11 +9,44 @@ import panel as pn
 import vega
 pn.extension('vega')
 
-## Functions only for testing
+########
+#### Auxiliary functions
+########
+def calculate_highD_dist_matrix(data):
+    non_normalized = euclidean_distances(data)
+    max_value = np.max(non_normalized)
+    return non_normalized/max_value
 
-def hex_to_number(hex):
-    h = tuple(int(hex.lstrip('#')[i:i+2], 16) for i in (0, 2, 4))
-    return h[0]
+def rgb_to_hsv(rgb):
+    r = float(rgb[0])
+    g = float(rgb[1])
+    b = float(rgb[2])
+    high = max(r, g, b)
+    low = min(r, g, b)
+    h, s, v = high, high, high
+
+    d = high - low
+    s = 0 if high == 0 else d/high
+
+    if high == low:
+        h = 0.0
+    else:
+        h = {
+            r: (g - b) / d + (6 if g < b else 0),
+            g: (b - r) / d + 2,
+            b: (r - g) / d + 4,
+        }[high]
+        h /= 6
+
+    return h, s, v
+
+def hex_to_rgb(hex):
+    hex = hex.lstrip('#')
+    hlen = len(hex)
+    return list(int(hex[i:i+int(hlen/3)], 16) for i in range(0, hlen, int(hlen/3)))
+
+def hex_to_hsv(hex):
+    return rgb_to_hsv(hex_to_rgb(hex))
 
 def normalise_number_between_0_and_1(nr, domain_min, domain_max):
     return (nr-domain_min)/(domain_max - domain_min)
@@ -21,8 +54,10 @@ def normalise_number_between_0_and_1(nr, domain_min, domain_max):
 def normalise_number_between_0_and_255(nr, domain_min, domain_max):
     return 255*normalise_number_between_0_and_1(nr, domain_min, domain_max)
 
-## Load data
-def load_data(dataset):
+########
+#### Load test data
+########
+def load_testdata(dataset):
     if dataset == 'horse':
         data = pd.read_csv('data/horse.csv', header=0)
         data = data.sample(n=1000)
@@ -30,47 +65,91 @@ def load_data(dataset):
         x_min = min(data['x'])
         x_max = max(data['x'])
         # zs = data['z'].values
-        colours = data['x'].map(lambda x:normalise_number_between_0_and_255(x, x_min, x_max)).values
-        return(values, colours)
+        lens_values = data['x'].map(lambda x:normalise_number_between_0_and_255(x, x_min, x_max)).values
+        return(values, lens_values)
     elif dataset == 'simulated':
         data = pd.read_csv('data/sim.csv', header=0)
         values = data[['x','y']]
-        colours = np.zeros(1)
-        return(values, colours)
+        lens_values = np.zeros(1)
+        return(values, lens_values)
     elif dataset == 'circles':
         data = pd.read_csv('data/five_circles.csv', header=0)
         values = data[['x','y']].values.tolist()
-        colours = list(data['hue'].map(lambda x:hex_to_number(x)))
-        return(values, colours)
+        lens_values = data['hue'].map(lambda x:hex_to_hsv(x)[0]).values
+        return(values, lens_values)
     else:
         print("Dataset not known")
 
-def calculate_highD_dist_matrix(data):
-    return euclidean_distances(data)
-
-## Create MST
+########
+#### Create MST
+########
 def matrix_to_topright_array(matrix):
     for i, vector in enumerate(matrix):
         for j, value in enumerate(vector):
             if ( j > i ):
                 yield value
 
-def matrix_to_all_combinations(matrix):
-    for i, vector in enumerate(matrix):
-        for j, value in enumerate(vector):
-            if ( j > i ):
-                yield [i,j]
+# def matrix_to_all_combinations(matrix):
+#     for i, vector in enumerate(matrix):
+#         for j, value in enumerate(vector):
+#             if ( j > i ):
+#                 yield [i,j]
 
-def create_mst(dist_matrix, colours):
+def create_mst(dist_matrix, lens_values):
     complete_graph = ig.Graph.Full(len(dist_matrix[0]))
-    complete_graph.vs["colour"] = colours
+    complete_graph.vs["lens_value"] = lens_values
     complete_graph.es["distance"] = list(matrix_to_topright_array(dist_matrix))
     return complete_graph.spanning_tree(weights = list(matrix_to_topright_array(dist_matrix)))
 
-## Draw the graph
+########
+#### Alter distance matrix to incorporate lens
+########
+# There are 2 options to incorporate a lens:
+# 1. Set all values in the distance matrix of datapoints that are in non-adjacent
+#    bins to 1000, but leave distances within a bin and between adjacent
+#    bins untouched.
+# 2. a. Set all values in the distance matrix of datapoints that are in non-adjacent
+#       bins to 1000, add 2 to the values of datapoints in adjacent bins, and
+#       leave distances of points in a bin untouched.
+#    b. Build the MST
+#    c. Run community detection
+#    d. In the distance matrix: add a 2 to some of the data-pairs, i.e. to those
+#       that are in different communities.
+#    e. Run the regular MST again on this new distance matrix (so is the same
+#       as in step a, but some of the points _within_ a bin are also + 2)
+def assign_bins(lens_values, nr_bins):
+    # np.linspace calculates bin boundaries
+    # e.g. bins = np.linspace(0, 1, 10)
+    #  => array([0.        , 0.11111111, 0.22222222, 0.33333333, 0.44444444,
+    #            0.55555556, 0.66666667, 0.77777778, 0.88888889, 1.        ])
+    bins = np.linspace(min(lens_values), max(lens_values), nr_bins)
+
+    # np.digitize identifies the correct bin for each datapoint
+    # e.g.
+    #  => array([3, 9, 7, 8, 8, 3, 9, 6, 4, 3])
+    return np.digitize(lens_values, bins)
+
+def create_lensed_distmatrix_1step(matrix, assigned_bins):
+    '''
+    This will set all distances in non-adjacent bins to 1000. Data was
+    normalised between 0 and 1, so 1000 is far (using infinity gives issues in
+    later computations).
+    '''
+    size = len(matrix)
+    single_step_addition_matrix = np.full((size,size), 1000)
+
+    for i in range(0, size):
+        for j in range(i+1,size):
+            if ( abs(assigned_bins[i] - assigned_bins[j]) <= 1 ):
+                single_step_addition_matrix[i][j] = 0
+    return matrix + single_step_addition_matrix
+
+########
+#### Draw the graph
+########
 def create_vega_nodes(graph):
     for v in graph.vs():
-        yield({"name": v.index, "colour": v.attributes()['colour']})
+        yield({"name": v.index, "lens_value": v.attributes()['lens_value']})
 
 def create_vega_links(graph):
     for e in graph.es():
@@ -78,10 +157,10 @@ def create_vega_links(graph):
 
 def create_gephi_files(graph, filename):
     with open(filename + '_nodes.csv', 'w') as f:
-        f.write("colour\n")
+        f.write("lens_value\n")
         counter = 0
         for v in graph.vs():
-            f.write(str(v.attributes()['colour']) + "\n")
+            f.write(str(v.attributes()['lens_value']) + "\n")
             counter += 1
     with open(filename + '_edges.csv', 'w') as f:
         f.write("source\ttarget\tvalue\n")
@@ -156,8 +235,8 @@ def draw_stad(dataset, graph):
             {
               "name": "colour",
               "type": "linear",
-              "domain": {"data": "node-data", "field": "colour"},
-              "range": {"scheme": "oranges"}
+              "domain": {"data": "node-data", "field": "lens_value"},
+              "range": {"scheme": "rainbow"}
             }
           ],
 
@@ -193,7 +272,8 @@ def draw_stad(dataset, graph):
 
               "encode": {
                 "enter": {
-                  "fill": {"field": "colour", "scale": "colour"}
+                  "fill": {"field": "lens_value", "scale": "colour"},
+                  "tooltip": {"field": "lens_value"}
                 },
                 "update": {
                   "size": {"value": 50},
@@ -239,8 +319,9 @@ def draw_stad(dataset, graph):
 
     return pn.Row(pn.Column(pn.pane.Markdown("## Dataset: " + dataset),strength_picker, distance_picker, radius_picker, theta_picker, distance_max_picker), plot).show()
 
-
-## Graph to distance matrix
+########
+#### Evaluate result
+########
 def graph_to_distancematrix(graph):
     return graph.shortest_paths_dijkstra()
 
@@ -252,18 +333,12 @@ def correlation_between_distance_matrices(matrix1, matrix2):
     return np.corrcoef(matrix1.flatten(), np.asarray(matrix2).flatten())[0][1]
 
 ## Create list of links to add
-def normalise_matrix(mtx):
-    '''
-    Make all values in a matrix to be between 0 and 1
-    '''
-    return (mtx - np.min(mtx))/np.ptp(mtx)
-
-def identify_error_in_distances(mtx1, mtx2):
-    '''
-    Substract distance matrices. Should be used to substract
-    the original distance matrix from the graph distance matrix.
-    '''
-    return normalise_matrix(mtx1) - normalise_matrix(mtx2)
+# def identify_error_in_distances(mtx1, mtx2):
+#     '''
+#     Substract distance matrices. Should be used to substract
+#     the original distance matrix from the graph distance matrix.
+#     '''
+#     return normalise_matrix(mtx1) - normalise_matrix(mtx2)
 
 def create_list_of_all_links_with_values(highD_dist_matrix):
     '''
@@ -373,14 +448,22 @@ def run_basinhopping(cf, mst, links_to_add, highD_dist_matrix, debug = False):
     g = add_links_to_graph(mst, highD_dist_matrix, links_to_add, result.x[0])
     return g
 
-## Bringing everything together
-def run_stad(values, colours, debug=False):
+########
+#### Bringing everything together
+########
+def run_stad(values, lens_values, lens=False, debug=False):
     if debug: print("Calculating highD distance matrix")
     highD_dist_matrix = calculate_highD_dist_matrix(values)
+    if debug: print("Tweaking distance matrix if we're working with a lens")
+    if lens:
+        assigned_bins = assign_bins(lens_values, 5)
+        dist_matrix = create_lensed_distmatrix_1step(highD_dist_matrix, assigned_bins)
+    else:
+        dist_matrix = highD_dist_matrix
     if debug: print("Calculating MST")
-    mst = create_mst(highD_dist_matrix, colours)
+    mst = create_mst(dist_matrix, lens_values)
     if debug: print("Creating list of all links")
-    all_links = create_list_of_all_links_with_values(highD_dist_matrix)
+    all_links = create_list_of_all_links_with_values(dist_matrix)
     if debug: print("Removing MST links and sorting")
     list_of_links_to_add = create_list_of_links_to_add(all_links, mst)
 
@@ -388,7 +471,7 @@ def run_stad(values, colours, debug=False):
             cost_function,
             mst,
             list_of_links_to_add,
-            highD_dist_matrix,
+            dist_matrix,
             debug=debug)
     return g
 
@@ -396,8 +479,8 @@ def main():
     dataset = 'circles'
     # dataset = 'horse'
     # dataset = 'simulated'
-    values, colours = load_data(dataset)
-    g = run_stad(values, colours, debug=True)
+    values, lens_values = load_testdata(dataset)
+    g = run_stad(values, lens_values, lens=False, debug=False)
     draw_stad(dataset, g)
     # create_gephi_files(g, dataset)
 
