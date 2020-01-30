@@ -5,7 +5,7 @@ with open("README.md", "r") as fh:
 
 setuptools.setup(
     name="stad",
-    version="2.0.0",
+    version="2.0.1",
     author="Jan Aerts",
     author_email="jan.aerts@uhasselt.be",
     description="Dimensionality reduction through Simplified Topological Abstraction of Data",
