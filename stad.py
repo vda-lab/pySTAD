@@ -65,18 +65,18 @@ def load_testdata(dataset):
         x_min = min(data['x'])
         x_max = max(data['x'])
         # zs = data['z'].values
-        lens_values = data['x'].map(lambda x:normalise_number_between_0_and_255(x, x_min, x_max)).values
-        return(values, lens_values)
+        lens = data['x'].map(lambda x:normalise_number_between_0_and_255(x, x_min, x_max)).values
+        return(values, lens)
     elif dataset == 'simulated':
         data = pd.read_csv('data/sim.csv', header=0)
         values = data[['x','y']]
-        lens_values = np.zeros(1)
-        return(values, lens_values)
+        lens = np.zeros(1)
+        return(values, lens)
     elif dataset == 'circles':
         data = pd.read_csv('data/five_circles.csv', header=0)
         values = data[['x','y']].values.tolist()
-        lens_values = data['hue'].map(lambda x:hex_to_hsv(x)[0]).values
-        return(values, lens_values)
+        lens = data['hue'].map(lambda x:hex_to_hsv(x)[0]).values
+        return(values, lens)
     else:
         print("Dataset not known")
 
@@ -95,9 +95,10 @@ def matrix_to_topright_array(matrix):
 #             if ( j > i ):
 #                 yield [i,j]
 
-def create_mst(dist_matrix, lens_values):
+def create_mst(dist_matrix, lens = []):
     complete_graph = ig.Graph.Full(len(dist_matrix[0]))
-    complete_graph.vs["lens_value"] = lens_values
+    if len(lens) > 0:
+        complete_graph.vs["lens"] = lens
     complete_graph.es["distance"] = list(matrix_to_topright_array(dist_matrix))
     return complete_graph.spanning_tree(weights = list(matrix_to_topright_array(dist_matrix)))
 
@@ -117,17 +118,17 @@ def create_mst(dist_matrix, lens_values):
 #       that are in different communities.
 #    e. Run the regular MST again on this new distance matrix (so is the same
 #       as in step a, but some of the points _within_ a bin are also + 2)
-def assign_bins(lens_values, nr_bins):
+def assign_bins(lens, nr_bins):
     # np.linspace calculates bin boundaries
     # e.g. bins = np.linspace(0, 1, 10)
     #  => array([0.        , 0.11111111, 0.22222222, 0.33333333, 0.44444444,
     #            0.55555556, 0.66666667, 0.77777778, 0.88888889, 1.        ])
-    bins = np.linspace(min(lens_values), max(lens_values), nr_bins)
+    bins = np.linspace(min(lens), max(lens), nr_bins)
 
     # np.digitize identifies the correct bin for each datapoint
     # e.g.
     #  => array([3, 9, 7, 8, 8, 3, 9, 6, 4, 3])
-    return np.digitize(lens_values, bins)
+    return np.digitize(lens, bins)
 
 def create_lensed_distmatrix_1step(matrix, assigned_bins):
     '''
@@ -148,8 +149,12 @@ def create_lensed_distmatrix_1step(matrix, assigned_bins):
 #### Draw the graph
 ########
 def create_vega_nodes(graph):
-    for v in graph.vs():
-        yield({"name": v.index, "lens_value": v.attributes()['lens_value']})
+    if 'lens' in graph.vs()[0].attributes():
+        for v in graph.vs():
+            yield({"name": v.index, "lens": v.attributes()['lens']})
+    else:
+        for v in graph.vs():
+            yield({"name": v.index})
 
 def create_vega_links(graph):
     for e in graph.es():
@@ -157,11 +162,19 @@ def create_vega_links(graph):
 
 def create_gephi_files(graph, filename):
     with open(filename + '_nodes.csv', 'w') as f:
-        f.write("lens_value\n")
-        counter = 0
-        for v in graph.vs():
-            f.write(str(v.attributes()['lens_value']) + "\n")
-            counter += 1
+        if 'lens' in graph.vs()[0].attributes():
+            f.write("id\tlens\n")
+            counter = 0
+            for v in graph.vs():
+                f.write(str(counter) + "\t" + str(v.attributes()['lens']) + "\n")
+                counter += 1
+        else:
+            f.write("id\n")
+            counter = 0
+            for v in graph.vs():
+                f.write(str(counter) + "\n")
+                counter += 1
+
     with open(filename + '_edges.csv', 'w') as f:
         f.write("source\ttarget\tvalue\n")
         for e in graph.es():
@@ -185,6 +198,18 @@ def draw_stad(dataset, graph):
         links = list(create_vega_links(graph))
         nodes_string = str(nodes).replace("'", '"')
         links_string = str(links).replace("'", '"')
+
+        enter = {}
+        if 'lens' in nodes[0]:
+            enter = {
+              "fill": {"field": "lens", "scale": "colour"},
+              "tooltip": {"field": "lens"}
+            }
+        else:
+            enter = {
+              "fill": {"value": "lightgrey"}
+            }
+
         return pn.pane.Vega({
           "$schema": "https://vega.github.io/schema/vega/v5.json",
           "width": 1000,
@@ -235,7 +260,7 @@ def draw_stad(dataset, graph):
             {
               "name": "colour",
               "type": "linear",
-              "domain": {"data": "node-data", "field": "lens_value"},
+              "domain": {"data": "node-data", "field": "lens"},
               "range": {"scheme": "rainbow"}
             }
           ],
@@ -271,10 +296,7 @@ def draw_stad(dataset, graph):
               ],
 
               "encode": {
-                "enter": {
-                  "fill": {"field": "lens_value", "scale": "colour"},
-                  "tooltip": {"field": "lens_value"}
-                },
+                "enter": enter,
                 "update": {
                   "size": {"value": 50},
                   "cursor": {"value": "pointer"}
@@ -451,17 +473,17 @@ def run_basinhopping(cf, mst, links_to_add, highD_dist_matrix, debug = False):
 ########
 #### Bringing everything together
 ########
-def run_stad(values, lens_values, lens=False, debug=False):
+def run_stad(values, lens=[], debug=False):
     if debug: print("Calculating highD distance matrix")
     highD_dist_matrix = calculate_highD_dist_matrix(values)
     if debug: print("Tweaking distance matrix if we're working with a lens")
-    if lens:
-        assigned_bins = assign_bins(lens_values, 5)
+    if len(lens) > 0:
+        assigned_bins = assign_bins(lens, 5)
         dist_matrix = create_lensed_distmatrix_1step(highD_dist_matrix, assigned_bins)
     else:
         dist_matrix = highD_dist_matrix
     if debug: print("Calculating MST")
-    mst = create_mst(dist_matrix, lens_values)
+    mst = create_mst(dist_matrix, lens)
     if debug: print("Creating list of all links")
     all_links = create_list_of_all_links_with_values(dist_matrix)
     if debug: print("Removing MST links and sorting")
@@ -479,8 +501,9 @@ def main():
     dataset = 'circles'
     # dataset = 'horse'
     # dataset = 'simulated'
-    values, lens_values = load_testdata(dataset)
-    g = run_stad(values, lens_values, lens=False, debug=False)
+    values, lens = load_testdata(dataset)
+    # g = run_stad(values, lens=lens, debug=False)
+    g = run_stad(values, lens=lens, debug=False)
     draw_stad(dataset, g)
     # create_gephi_files(g, dataset)
 
