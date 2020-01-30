@@ -89,16 +89,13 @@ def matrix_to_topright_array(matrix):
             if ( j > i ):
                 yield value
 
-# def matrix_to_all_combinations(matrix):
-#     for i, vector in enumerate(matrix):
-#         for j, value in enumerate(vector):
-#             if ( j > i ):
-#                 yield [i,j]
-
-def create_mst(dist_matrix, lens = []):
+def create_mst(dist_matrix, lens = [], features = {}):
     complete_graph = ig.Graph.Full(len(dist_matrix[0]))
     if len(lens) > 0:
         complete_graph.vs["lens"] = lens
+    if not features == {}:
+        for f in list(features.keys()):
+            complete_graph.vs[f] = features[f]
     complete_graph.es["distance"] = list(matrix_to_topright_array(dist_matrix))
     return complete_graph.spanning_tree(weights = list(matrix_to_topright_array(dist_matrix)))
 
@@ -135,6 +132,8 @@ def create_lensed_distmatrix_1step(matrix, assigned_bins):
     This will set all distances in non-adjacent bins to 1000. Data was
     normalised between 0 and 1, so 1000 is far (using infinity gives issues in
     later computations).
+    Everything after this (building the MST, getting the list of links, etc)
+    will be based on this new distance matrix.
     '''
     size = len(matrix)
     single_step_addition_matrix = np.full((size,size), 1000)
@@ -149,16 +148,21 @@ def create_lensed_distmatrix_1step(matrix, assigned_bins):
 #### Draw the graph
 ########
 def create_vega_nodes(graph):
-    if 'lens' in graph.vs()[0].attributes():
-        for v in graph.vs():
-            yield({"name": v.index, "lens": v.attributes()['lens']})
-    else:
-        for v in graph.vs():
-            yield({"name": v.index})
+    output = []
+    # The following will automatically pick up the lens...
+    feature_labels = graph.vs()[0].attributes().keys()
+    for v in graph.vs():
+        node = {"name": v.index}
+        for f in feature_labels:
+            node[f] = v.attributes()[f]
+        output.append(node)
+    return output
 
 def create_vega_links(graph):
+    output = []
     for e in graph.es():
-        yield({"source": e.source, "target": e.target, "value": e.attributes()['distance']})
+        output.append({"source": e.source, "target": e.target, "value": e.attributes()['distance']})
+    return output
 
 def create_gephi_files(graph, filename):
     with open(filename + '_nodes.csv', 'w') as f:
@@ -180,7 +184,7 @@ def create_gephi_files(graph, filename):
         for e in graph.es():
             f.write(str(e.source) + "\t" + str(e.target) + "\t" + str(e.attributes()['distance']) + "\n")
 
-def draw_stad(dataset, graph):
+def draw_stad(graph):
     strength_picker = pn.widgets.IntSlider(name='Attraction strength', start=-10, end=1, step=1, value=-3)
     distance_picker = pn.widgets.IntSlider(name='Distance between nodes', start=1, end=30, step=1, value=15)
     radius_picker = pn.widgets.IntSlider(name='Node radius', start=1, end=5, step=1, value=5)
@@ -194,20 +198,26 @@ def draw_stad(dataset, graph):
 
     @pn.depends(strength_picker.param.value, distance_picker.param.value, radius_picker.param.value, theta_picker.param.value, distance_max_picker.param.value)
     def plot(strength, distance, radius, theta, distance_max):
-        nodes = list(create_vega_nodes(graph))
-        links = list(create_vega_links(graph))
+        nodes = create_vega_nodes(graph)
+        links = create_vega_links(graph)
         nodes_string = str(nodes).replace("'", '"')
         links_string = str(links).replace("'", '"')
+
+        tooltip_signal = {}
+        feature_labels = nodes[0].keys()
+        for f in feature_labels:
+            tooltip_signal[f] = "datum['" + f + "']"
 
         enter = {}
         if 'lens' in nodes[0]:
             enter = {
-              "fill": {"field": "lens", "scale": "colour"},
-              "tooltip": {"field": "lens"}
+                "fill": {"field": "lens", "scale": "colour"},
+                "tooltip": {"signal": str(tooltip_signal).replace('"','')} # Replace is necessary because no quotes allowed around "datum" (check vega editor)
             }
         else:
             enter = {
-              "fill": {"value": "lightgrey"}
+                "fill": {"value": "lightgrey"},
+                "tooltip": {"signal": str(tooltip_signal).replace('"','')}
             }
 
         return pn.pane.Vega({
@@ -339,7 +349,7 @@ def draw_stad(dataset, graph):
           ]
         })
 
-    return pn.Row(pn.Column(pn.pane.Markdown("## Dataset: " + dataset),strength_picker, distance_picker, radius_picker, theta_picker, distance_max_picker), plot).show()
+    return pn.Row(pn.Column(strength_picker, distance_picker, radius_picker, theta_picker, distance_max_picker), plot).show()
 
 ########
 #### Evaluate result
@@ -353,14 +363,6 @@ def correlation_between_distance_matrices(matrix1, matrix2):
     correlation_between_distance_matrices(highD_dist_matrix, list(graph_to_distancematrix(mst)))}
     '''
     return np.corrcoef(matrix1.flatten(), np.asarray(matrix2).flatten())[0][1]
-
-## Create list of links to add
-# def identify_error_in_distances(mtx1, mtx2):
-#     '''
-#     Substract distance matrices. Should be used to substract
-#     the original distance matrix from the graph distance matrix.
-#     '''
-#     return normalise_matrix(mtx1) - normalise_matrix(mtx2)
 
 def create_list_of_all_links_with_values(highD_dist_matrix):
     '''
@@ -396,16 +398,10 @@ def create_list_of_links_to_add(list_of_links, graph):
     between the high-dimensional space and the MST.
     Example: below is the dataset from data/sim.csv, with the MST indicated.
     If we sort by the _error_, then the first link that will be added is
-<<<<<<< HEAD
-    between the points indicated with an 'o'. If we sort by distance in the
-    original high-D space, the first link that will be added is between the
-    points that are indicated with a 'v'.
-=======
     between the points indicated with an 'o' (because they lie at the opposite
     ends of the MST). If we sort by distance in the original high-D space, the
     first link that will be added is between the points that are indicated
     with a 'v'.
->>>>>>> lens
 
                 *--*--*--*
                 |        |
@@ -473,9 +469,19 @@ def run_basinhopping(cf, mst, links_to_add, highD_dist_matrix, debug = False):
 ########
 #### Bringing everything together
 ########
-def run_stad(values, lens=[], debug=False):
-    if debug: print("Calculating highD distance matrix")
-    highD_dist_matrix = calculate_highD_dist_matrix(values)
+def run_stad(highD_dist_matrix, lens=[], features={}, debug=False):
+    '''
+    Options:
+    * `lens` needs to be an array with a single numerical value for each datapoint,
+       or an empty array
+    * `features` is a list of feature that will be added to the
+       node tooltip. Format: {'label1': [value1, value2], 'label2': [value1, value2]}
+    '''
+    ## Check if distance matrix is normalised
+    if ( np.min(highD_dist_matrix) < 0 or np.max(highD_dist_matrix) > 1 ):
+        print("ERROR: input distance matrix needs to be normalised between 0 and 1")
+        exit()
+
     if debug: print("Tweaking distance matrix if we're working with a lens")
     if len(lens) > 0:
         assigned_bins = assign_bins(lens, 5)
@@ -483,12 +489,12 @@ def run_stad(values, lens=[], debug=False):
     else:
         dist_matrix = highD_dist_matrix
     if debug: print("Calculating MST")
-    mst = create_mst(dist_matrix, lens)
+    mst = create_mst(dist_matrix, lens, features)
     if debug: print("Creating list of all links")
     all_links = create_list_of_all_links_with_values(dist_matrix)
     if debug: print("Removing MST links and sorting")
     list_of_links_to_add = create_list_of_links_to_add(all_links, mst)
-
+    if debug: print("Start basinhopping")
     g = run_basinhopping(
             cost_function,
             mst,
@@ -498,14 +504,16 @@ def run_stad(values, lens=[], debug=False):
     return g
 
 def main():
-    dataset = 'circles'
-    # dataset = 'horse'
-    # dataset = 'simulated'
-    values, lens = load_testdata(dataset)
-    # g = run_stad(values, lens=lens, debug=False)
-    g = run_stad(values, lens=lens, debug=False)
-    draw_stad(dataset, g)
-    # create_gephi_files(g, dataset)
+    data = pd.read_csv('data/five_circles.csv', header=0)
+    values = data[['x','y']].values.tolist()
+    lens = data['hue'].map(lambda x:hex_to_hsv(x)[0]).values
+    xs = data['x'].values.tolist()
+    ys = data['y'].values.tolist()
+    hues = data['hue'].values.tolist()
+    highD_dist_matrix = calculate_highD_dist_matrix(values)
+    g = run_stad(highD_dist_matrix, lens=lens, features={'x':xs, 'y':ys, 'hue': hues})
+    # g = run_stad(highD_dist_matrix, features={'x':xs, 'y':ys, 'hue':hues})
+    draw_stad(g)
 
 if __name__ == '__main__':
     main()
