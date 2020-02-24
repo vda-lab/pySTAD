@@ -79,8 +79,8 @@ def create_vega_nodes(graph, lens=[], features={}):
     nodes = []
     # The following will automatically pick up the lens...
     feature_labels = features.keys()
-    print("DEBUG: nr of nodes = " + str(len(graph.vs())))
-    print(features)
+    # print("DEBUG: nr of nodes = " + str(len(graph.vs())))
+    # print(features)
     for i in range(0, len(graph.vs())):
         node = {"name": i}
         nodes.append(node)
@@ -148,7 +148,7 @@ def draw_stad(graph, lens=[], features={}):
     @pn.depends(strength_picker.param.value, distance_picker.param.value, radius_picker.param.value, theta_picker.param.value, distance_max_picker.param.value)
     def plot(strength, distance, radius, theta, distance_max):
         nodes = create_vega_nodes(graph, lens, features)
-        print(nodes[0])
+        # print(nodes[0])
         links = create_vega_links(graph)
         # nodes_string = str(nodes).replace("'", '"')
         # links_string = str(links).replace("'", '"')
@@ -362,7 +362,7 @@ def normalise_number_between_0_and_255(nr, domain_min, domain_max):
 
 def load_testdata(dataset):
     if dataset == 'horse':
-        data = pd.read_csv('data/horse.csv', header=0)
+        data = pd.read_csv('stad/data/horse.csv', header=0)
         data = data.sample(n=500)
         values = data[['x','y','z']].values.tolist()
         x_min = min(data['x'])
@@ -388,6 +388,7 @@ def load_testdata(dataset):
         }
         highD_dist_matrix = calculate_highD_dist_matrix(values)
         return (highD_dist_matrix, lens, features)
+        # return (highD_dist_matrix, [], features)
     elif dataset == 'barcelona':
         non_normalised_highD_dist_matrix = np.array(pd.read_csv('stad/data/barcelona_distance_matrix.csv', header=None))
         max_value = np.max(non_normalised_highD_dist_matrix)
@@ -407,6 +408,56 @@ def load_testdata(dataset):
         return highD_dist_matrix, [], features
     else:
         raise ValueError('Unknown dataset: {}'.format(dataset))
+
+
+# LENS FUNCTIONS
+
+
+########
+#### Alter distance matrix to incorporate lens
+########
+# There are 2 options to incorporate a lens:
+# 1. Set all values in the distance matrix of datapoints that are in non-adjacent
+#    bins to 1000, but leave distances within a bin and between adjacent
+#    bins untouched.
+# 2. a. Set all values in the distance matrix of datapoints that are in non-adjacent
+#       bins to 1000, add 2 to the values of datapoints in adjacent bins, and
+#       leave distances of points in a bin untouched.
+#    b. Build the MST
+#    c. Run community detection
+#    d. In the distance matrix: add a 2 to some of the data-pairs, i.e. to those
+#       that are in different communities.
+#    e. Run the regular MST again on this new distance matrix (so is the same
+#       as in step a, but some of the points _within_ a bin are also + 2)
+def assign_bins(lens, nr_bins):
+    # np.linspace calculates bin boundaries
+    # e.g. bins = np.linspace(0, 1, 10)
+    #  => array([0.        , 0.11111111, 0.22222222, 0.33333333, 0.44444444,
+    #            0.55555556, 0.66666667, 0.77777778, 0.88888889, 1.        ])
+    bins = np.linspace(min(lens), max(lens), nr_bins)
+
+    # np.digitize identifies the correct bin for each datapoint
+    # e.g.
+    #  => array([3, 9, 7, 8, 8, 3, 9, 6, 4, 3])
+    return np.digitize(lens, bins)
+
+
+def create_lensed_distmatrix_1step(matrix, assigned_bins):
+    '''
+    This will set all distances in non-adjacent bins to 1000. Data was
+    normalised between 0 and 1, so 1000 is far (using infinity gives issues in
+    later computations).
+    Everything after this (building the MST, getting the list of links, etc)
+    will be based on this new distance matrix.
+    '''
+    size = len(matrix)
+    single_step_addition_matrix = np.full((size,size), 1000)
+
+    for i in range(0, size):
+        for j in range(i+1,size):
+            if ( abs(assigned_bins[i] - assigned_bins[j]) <= 1 ):
+                single_step_addition_matrix[i][j] = 0
+    return matrix + single_step_addition_matrix
 
 
 # STAD
@@ -494,9 +545,8 @@ class MyTakeStep(object):
             nr_of_links = self.max_links
         return nr_of_links
 
-def cost_function(nr_of_links, one_sided_mst, edges, highD_dist_matrix):
-    # global xs, ys, dists
 
+def cost_function(nr_of_links, one_sided_mst, edges, highD_dist_matrix):
     nr_of_links = int(nr_of_links)
     adj = add_unit_edges_to_matrix(one_sided_mst, edges[:nr_of_links])
     dist = shortest_path(adj, method="D", directed=False, unweighted=True)
@@ -525,30 +575,30 @@ def run_custom_basinhopping(one_sided_mst, not_mst, edges, highD_dist_matrix):
     temperatures = list(map(lambda x:(4.596-log(x))/4.596, range(1,100)))
 
     for temperature in temperatures:
-        print("-----------")
+        # print("-----------")
         stepsize = int(max_links * temperature)
-        print("temperature: " + str(temperature))
-        print("stepsize: " + str(stepsize))
+        # print("temperature: " + str(temperature))
+        # print("stepsize: " + str(stepsize))
         nr_of_links = take_step(0, max_links, stepsize)
-        print("nr_of_links: " + str(nr_of_links))
-        print("correlation: " + str(best_correlation))
+        # print("nr_of_links: " + str(nr_of_links))
+        # print("correlation: " + str(best_correlation))
 
         new_corr, dist = cost_function(nr_of_links, one_sided_mst, edges, highD_dist_matrix)
-        print("new correlation: " + str(new_corr))
+        # print("new correlation: " + str(new_corr))
         if ( new_corr > best_correlation ):
-            print("  => ACCEPTED")
+            # print("  => ACCEPTED")
             best_correlation = new_corr
             best_nr_of_links = nr_of_links
         else:
             cutoff = exp((new_corr-best_correlation)/temperature)
             random_number = np.random.random()
-            print("accept als cutoff > random_number?: " + str(cutoff) + ' > ' + str(random_number))
+            # print("accept if cutoff > random_number?: " + str(cutoff) + ' > ' + str(random_number))
             if cutoff > random_number:
-                print("  => STILL ACCEPTED")
+                # print("  => STILL ACCEPTED")
                 best_correlation = new_corr
                 best_nr_of_links = nr_of_links
-            else:
-                print("  => REJECTED")
+            # else:
+                # print("  => REJECTED")
 
         xs.append(nr_of_links)
         ys.append(new_corr)
@@ -607,17 +657,27 @@ def create_final_unit_adj(one_sided_mst, edges, nr_of_links_to_add):
 
 @click.command()
 @click.argument('dataset', type=click.Choice(['circles', 'horse', 'simulated', 'barcelona'], case_sensitive=False))
-def main(dataset):
-    highD_dist_matrix, lens_data, features = load_testdata(dataset)
+@click.option('--nr_bins', default=5)
+@click.option('--lens/--no-lens', 'use_lens', default=False)
+def main(dataset, nr_bins, use_lens):
+    original_highD_dist_matrix, lens_data, features = load_testdata(dataset)
+
+    if use_lens and len(lens_data) > 0:
+        assigned_bins = assign_bins(lens_data, nr_bins)
+        highD_dist_matrix = create_lensed_distmatrix_1step(original_highD_dist_matrix, assigned_bins)
+    else:
+        highD_dist_matrix = original_highD_dist_matrix
+
     mst = create_mst(highD_dist_matrix)
     one_sided_mst = np.where(triu_mask(mst, k=1), mst, 0)
     not_mst = masked_edges(highD_dist_matrix, mst == 0)
     edges, distances = ordered_edges(highD_dist_matrix, not_mst)  # We'll need distances later for STAD-R
-    best_nr_of_links, best_correlation, xs, ys, dists = run_custom_basinhopping(one_sided_mst, not_mst, edges, highD_dist_matrix)
+    best_nr_of_links, best_correlation, xs, ys, dists = run_custom_basinhopping(one_sided_mst, not_mst, edges, original_highD_dist_matrix)
     final_unit_adj = create_final_unit_adj(one_sided_mst, edges, best_nr_of_links)
     # result, xs, ys, dists = run_basinhopping(one_sided_mst, not_mst, edges, highD_dist_matrix)
     # final_unit_adj = create_final_unit_adj(one_sided_mst, edges, int(result['x'][0]))
-    final_weighted_adj = np.where(final_unit_adj == 1, highD_dist_matrix, 0)
+    final_weighted_adj = np.where(final_unit_adj == 1, original_highD_dist_matrix, 0)
+    # final_weighted_adj = np.where(one_sided_mst == 1, original_highD_dist_matrix, 0)
     best_x = best_nr_of_links
     best_y = best_correlation
     print("Number of tested positions: " + str(len(xs)))
@@ -633,7 +693,7 @@ def main(dataset):
         "Number of links in mst: " + str(np.sum(one_sided_mst)) + "<br/>" +
         "Number of links added: " + str(best_x) + "<br/>" +
         "Number of links final: " + str(np.sum(final_unit_adj)) + "<br/>" +
-        "Final correlation: " + str(best_y),
+        "Final correlation: <b>" + "{:.2f}".format(best_y) + "</b>",
         plot_qa(one_sided_mst,not_mst,final_unit_adj,final_weighted_adj,highD_dist_matrix,best_x,best_y,distances,xs,ys),
         draw_stad(g, lens_data, features)
     ).show()
