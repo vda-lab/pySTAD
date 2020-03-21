@@ -3,11 +3,13 @@ import click
 import pandas as pd
 import igraph as ig
 import numpy as np
-from copy import deepcopy
+# from copy import deepcopy
 from scipy import optimize
 from scipy.sparse.csgraph import dijkstra, minimum_spanning_tree, floyd_warshall, bellman_ford, johnson, shortest_path
 from math import exp
-from numpy import log
+from numpy import log, log10
+import datetime
+from sklearn.metrics.pairwise import euclidean_distances, cosine_distances
 
 # VISUALISATION FUNCTIONS
 
@@ -46,6 +48,36 @@ def plot_trend(plot_type, xlabel, ylabel, xs, ys, title, line_position=None, lin
     return p
 
 
+def plot_trend_vega(d):
+    return pn.pane.Vega({
+      "$schema": "https://vega.github.io/schema/vega-lite/v4.json",
+      "width": 300,
+      "height": 300,
+      "data": {"values": d},
+      "layer": [
+        {
+          "mark": {"type": "circle", "tooltip": {"data": "content"}},
+          "encoding": {
+            "x": {"field": "x", "type": "quantitative"},
+            "y": {"field": "y", "type": "quantitative"},
+            "color": {"value": "#1b9e77"},
+            "opacity": {"value": 0.5}
+
+          }
+        },
+        {
+          "mark": {"type": "circle", "tooltip": {"data": "content"}},
+          "encoding": {
+            "x": {"field": "x", "type": "quantitative"},
+            "y": {"field": "i", "type": "quantitative"},
+            "color": {"value": "#7570b3"},
+            "opacity": {"value": 0.5}
+          }
+        }
+      ],
+      "resolve": {"scale": {"y": "independent"}}
+    })
+
 def plot_spearman(final_unit_adj, highD_dist_matrix):
     xs = np.triu(highD_dist_matrix, 1).flatten()
     graph_dist = shortest_path(final_unit_adj, method='D', directed=False, unweighted=True)
@@ -68,19 +100,17 @@ def plot_qa(one_sided_mst,not_mst,final_unit_adj,final_weighted_adj,highD_dist_m
                 plot_matrix(final_weighted_adj, 'Final weighted matrix'),
                 plot_matrix(highD_dist_matrix, 'Original matrix')),
         pn.Row( plot_trend('scatter','nr_of_links','correlation', xs,ys,"Correlation vs nr links", best_x, 'vertical'),
-                plot_trend('line','iteration','correlation',range(0, len(ys)), ys, "Evolution of correlation (Should stabilise to maximum)", best_y, 'horizontal'),
-                plot_trend('line','iteration','nr_of_links',range(0, len(xs)), xs, "Evolution of nr of links (Should stabilise)", best_x, 'horizontal')),
+                plot_trend('scatter','iteration','correlation',range(0, len(ys)), ys, "Evolution of correlation (Should stabilise to maximum)", best_y, 'horizontal'),
+                plot_trend('scatter','iteration','nr_of_links',range(0, len(xs)), xs, "Evolution of nr of links (Should stabilise)", best_x, 'horizontal')),
         pn.Row( plot_spearman(final_unit_adj, highD_dist_matrix),
                 plot_trend('line','order','similarity',range(0, len(distances)),1-distances,"Ordered similarities of non-mst"),
                 plot_trend('line','iteration','Change in nr_of_links between steps',range(0, len(delta_xs)), delta_xs, "Delta xs (Should stabilise around 0)")))
 
 
-def create_vega_nodes(graph, lens=[], features={}):
+def create_vega_nodes(graph, features={}):
     nodes = []
     # The following will automatically pick up the lens...
     feature_labels = features.keys()
-    # print("DEBUG: nr of nodes = " + str(len(graph.vs())))
-    # print(features)
     for i in range(0, len(graph.vs())):
         node = {"name": i}
         nodes.append(node)
@@ -97,35 +127,36 @@ def create_vega_links(graph):
     return output
 
 
-def format_vertex_as_gephi(v, counter, has_lens=False, feature_labels=[]):
-    output = str(counter)
-    if has_lens:
-        output += "\t" + str(v.attributes()['lens'])
+def format_vertex_as_gephi(v, feature_labels):
+    output = str(v['name'])
     for fl in feature_labels:
-        output += "\t" + str(v.attributes()[fl])
+        output += "\t" + str(v[fl])
     output += "\n"
     return output
 
 
-def create_gephi_files(graph, filename):
-    feature_labels = graph.vs()[0].attributes().keys()
-    has_lens = False
-    if 'lens' in graph.vs()[0].attributes():
-        has_lens = True
+def create_gephi_files(graph, filename, features = {}):
+    nodes = []
+    feature_labels = features.keys()
+    for i in range(0, len(graph.vs())):
+        node = {"name": i}
+        nodes.append(node)
+    for f in feature_labels:
+        for i, node in enumerate(nodes):
+            node[f] = features[f][i]
+
+    feature_labels = ['name'] + list(feature_labels)
 
     with open(filename + '_nodes.csv', 'w') as f:
         header = "id"
-        if has_lens:
-            header += "\tlens"
         for fl in feature_labels:
             header += "\t" + str(fl)
         header += "\n"
         f.write(header)
 
-        counter = 0
-        for v in graph.vs():
-            f.write(format_vertex_as_gephi(v,counter,has_lens,feature_labels))
-            counter += 1
+        # for v in graph.vs():
+        for node in nodes:
+            f.write(format_vertex_as_gephi(node, feature_labels))
 
     with open(filename + '_edges.csv', 'w') as f:
         f.write("source\ttarget\tvalue\n")
@@ -133,7 +164,7 @@ def create_gephi_files(graph, filename):
             f.write(str(e.source) + "\t" + str(e.target) + "\t" + str(e.attributes()['weight']) + "\n")
 
 
-def draw_stad(graph, lens=[], features={}):
+def draw_stad(graph, features={}):
     strength_picker = pn.widgets.IntSlider(name='Attraction strength', start=-10, end=1, step=1, value=-3)
     distance_picker = pn.widgets.IntSlider(name='Distance between nodes', start=1, end=30, step=1, value=15)
     radius_picker = pn.widgets.IntSlider(name='Node radius', start=1, end=5, step=1, value=5)
@@ -147,7 +178,7 @@ def draw_stad(graph, lens=[], features={}):
 
     @pn.depends(strength_picker.param.value, distance_picker.param.value, radius_picker.param.value, theta_picker.param.value, distance_max_picker.param.value)
     def plot(strength, distance, radius, theta, distance_max):
-        nodes = create_vega_nodes(graph, lens, features)
+        nodes = create_vega_nodes(graph, features)
         # print(nodes[0])
         links = create_vega_links(graph)
         # nodes_string = str(nodes).replace("'", '"')
@@ -163,6 +194,11 @@ def draw_stad(graph, lens=[], features={}):
             enter = {
                 "fill": {"field": "colour"},
                 "tooltip": {"signal": str(tooltip_signal).replace('"','')} # Replace is necessary because no quotes allowed around "datum" (check vega editor)
+            }
+        elif 'lens' in nodes[0]:
+            enter = {
+                "fill": {"field": "lens", "scale": "colour"},
+                "tooltip": {"signal": str(tooltip_signal).replace('"', '')}
             }
         else:
             enter = {
@@ -303,14 +339,9 @@ def draw_stad(graph, lens=[], features={}):
 
 
 ## UTIL FUNCTIONS
-
-
-import numpy as np
-from sklearn.metrics.pairwise import euclidean_distances
-
-
 def calculate_highD_dist_matrix(data):
     non_normalized = euclidean_distances(data)
+    # non_normalized = cosine_distances(data)
     max_value = np.max(non_normalized)
     return non_normalized/max_value
 
@@ -360,17 +391,37 @@ def normalise_number_between_0_and_255(nr, domain_min, domain_max):
 # LOAD DATASET
 
 
+def flatten(l):
+    return [item for sublist in l for item in sublist]
+
+
 def load_testdata(dataset):
     if dataset == 'horse':
         data = pd.read_csv('stad/data/horse.csv', header=0)
-        data = data.sample(n=500)
-        values = data[['x','y','z']].values.tolist()
-        x_min = min(data['x'])
-        x_max = max(data['x'])
-        # zs = data['z'].values
-        lens = data['x'].map(lambda x: normalise_number_between_0_and_255(x, x_min, x_max)).values
-        highD_dist_matrix = calculate_highD_dist_matrix(values)
-        return highD_dist_matrix, lens, {}
+        # sample_indices = [383, 100, 8, 375, 314, 253, 310, 317, 72, 160, 369, 240, 243, 207, 232, 106, 394, 446, 221, 94, 391, 158, 392, 421, 267, 498, 319, 75, 38, 123, 317, 293, 354, 363, 456, 151, 168, 117, 386, 445, 373, 305, 242, 251, 113, 353, 379, 133, 452, 355, 162, 495, 167, 207, 463, 209, 105, 68, 492, 147, 321, 380, 283, 193, 378, 160, 331, 199, 21, 451, 173, 404, 326, 144, 414, 381, 361, 337, 335, 80, 230, 482, 269, 475, 135, 368, 192, 408, 1, 36, 450, 495, 219, 94, 157, 176, 181, 70, 314, 273, 443, 106, 189, 91, 198, 176, 135, 253, 72, 260, 242, 439, 78, 127, 171, 370, 360, 396, 267, 435, 332, 341, 342, 358, 358, 448, 109, 323, 355, 424, 125, 21, 401, 206, 214, 427, 208, 15, 374, 197, 66, 407, 420, 19, 173, 363, 118, 454, 461, 269, 23, 327, 484, 447, 275, 301, 122, 32, 275, 395, 478, 28, 61, 181, 41, 238, 307, 290, 483, 44, 358, 276, 5, 297, 117, 153, 352, 247, 469, 163, 445, 65, 197, 467, 439, 240, 257, 203, 346, 123, 33, 54, 395, 263, 321, 497, 97, 444, 136, 452, 223, 175, 81, 33, 109, 49, 367, 404, 239, 140, 168, 387, 428, 26, 132, 44, 255, 480, 141, 461, 82, 104, 461, 237, 170, 136, 333, 220, 134, 78, 160, 289, 299, 182, 155, 376, 426, 2, 479, 145, 304, 251, 193, 322, 253, 487, 120, 169, 73, 65, 34, 208, 497, 291, 283, 416, 46, 163, 248, 185, 400, 385, 371, 277, 434, 81, 443, 30, 294, 467, 354, 256, 27, 253, 448, 388, 167, 342, 56, 46, 341, 246, 62, 366, 351, 274, 475, 87, 210, 174, 159, 352, 482, 326, 462, 39, 260, 107, 174, 450, 133, 351, 185, 86, 297, 447, 68, 288, 344, 41, 227, 183, 168, 57, 371, 306, 148, 252, 48, 43, 126, 8, 97, 466, 222, 141, 275, 184, 68, 65, 488, 384, 92, 475, 340, 28, 63, 343, 177, 290, 484, 205, 205, 323, 138, 264, 52, 169, 95, 30, 351, 114, 99, 204, 315, 188, 397, 226, 356, 148, 353, 14, 453, 165, 238, 419, 324, 105, 412, 447, 477, 56, 227, 447, 126, 54, 477, 409, 413, 42, 435, 482, 46, 475, 261, 465, 65, 338, 74, 381, 445, 344, 154, 475, 69, 373, 3, 210, 195, 284, 200, 322, 147, 35, 53, 346, 67, 207, 46, 211, 7, 462, 210, 194, 451, 46, 307, 292, 83, 115, 451, 46, 97, 492, 243, 52, 21, 233, 277, 2, 386, 336, 478, 5, 365, 471, 375, 64, 439, 477, 134, 335, 262, 88, 136, 103, 5, 219, 444, 319, 298, 353, 6, 316, 12, 243, 203, 41, 19, 406, 24, 343, 361, 362, 225, 162, 318, 17, 454, 83, 426, 422, 173, 11, 153, 158, 429, 31, 223, 489, 494, 297, 65, 55, 29, 366, 473, 24, 60, 249, 407, 391, 59, 67, 326, 100, 327, 444, 479, 39]
+        # data = data.take(sample_indices)
+        # data = data.sample(n=500)
+        data['bin_x_10'] = pd.qcut(data.x, q=10, labels=range(0,10))
+        data['bin_y_10'] = pd.qcut(data.y, q=10, labels=range(0, 10))
+        data['bin_z_10'] = pd.qcut(data.z, q=10, labels=range(0, 10))
+
+        sample = []
+        for i in range(0,10):
+            sample.append(list(map(lambda x:[x[0],x[1],x[2]], data[data.bin_y_10 == i].sample(30).values)))
+
+        sample = flatten(sample)
+
+        x_min = min(sample[0])
+        x_max = max(sample[0])
+        lens = list(map(lambda x: normalise_number_between_0_and_255(x[0], x_min, x_max), sample))
+        features = {
+            'lens': lens
+        }
+        # print(features)
+        # lens = data[0].map(lambda x: normalise_number_between_0_and_255(x, x_min, x_max)).values
+
+        highD_dist_matrix = calculate_highD_dist_matrix(sample)
+        return highD_dist_matrix, lens, features
     elif dataset == 'simulated':
         data = pd.read_csv('stad/data/sim.csv', header=0)
         values = data[['x','y']]
@@ -466,6 +517,7 @@ def create_lensed_distmatrix_1step(matrix, assigned_bins):
 def create_mst(dist_matrix):
     """For a given distance matrix, returns the unit-distance MST."""
     # Use toarray because we want a regular nxn matrix, not the scipy sparse matrix.
+    np.random.seed(1)
     mst = minimum_spanning_tree(dist_matrix).toarray()
     # Set every edge weight to 1.
     mst = np.where(mst > 0, 1, 0)
@@ -500,7 +552,7 @@ def ordered_edges(distances, mask):
     For a given adjacency matrix with `n` edges and a like-sized mask, returns
     an n x 2 array of edges sorted by distance.
     """
-    # We are only interested in the indicies where our mask is truthy.
+    # We are only interested in the indices where our mask is truthy.
     # On a boolean array nonzero returns the true indices.
     # indices holds a tuple of arrays, one for each dimension.
     indices = np.nonzero(mask)
@@ -529,21 +581,21 @@ def add_unit_edges_to_matrix(adj_m, edges):
     return new_adj
 
 
-class MyTakeStep(object):
-    def __init__(self, initial_stepsize, initial_temperature, max_links=99999):
-        self.initial_stepsize = initial_stepsize
-        self.temperature = initial_temperature
-        self.max_links = max_links
-
-    def __call__(self, previous_nr_of_links):
-        new_stepsize = self.initial_stepsize*self.temperature
-        self.temperature = self.temperature*0.95
-        nr_of_links = int(np.random.normal(previous_nr_of_links, new_stepsize))
-        if nr_of_links < 0:
-            nr_of_links = 0
-        elif nr_of_links > self.max_links:
-            nr_of_links = self.max_links
-        return nr_of_links
+# class MyTakeStep(object):
+#     def __init__(self, initial_stepsize, initial_temperature, max_links=99999):
+#         self.initial_stepsize = initial_stepsize
+#         self.temperature = initial_temperature
+#         self.max_links = max_links
+#
+#     def __call__(self, previous_nr_of_links):
+#         new_stepsize = self.initial_stepsize*self.temperature
+#         self.temperature = self.temperature*0.98
+#         nr_of_links = int(np.random.normal(previous_nr_of_links, new_stepsize))
+#         if nr_of_links < 0:
+#             nr_of_links = 0
+#         elif nr_of_links > self.max_links:
+#             nr_of_links = self.max_links
+#         return nr_of_links
 
 
 def cost_function(nr_of_links, one_sided_mst, edges, highD_dist_matrix):
@@ -572,11 +624,17 @@ def run_custom_basinhopping(one_sided_mst, not_mst, edges, highD_dist_matrix):
     best_correlation = 0
     best_nr_of_links = 0
 
-    temperatures = list(map(lambda x:(4.596-log(x))/4.596, range(1,100)))
+    temperatures = []
+    nr_iterations = 100
+    for i in range(1, nr_iterations):
+        temperatures.append((log10(nr_iterations)-log10(i))/log10(nr_iterations))
+        # temperatures.append((5-log(i))/5)
+    # temperatures = list(map(lambda x:(4.596-log(x))/4.596, range(1,100)))
 
     for temperature in temperatures:
         # print("-----------")
         stepsize = int(max_links * temperature)
+        print(stepsize)
         # print("temperature: " + str(temperature))
         # print("stepsize: " + str(stepsize))
         nr_of_links = take_step(0, max_links, stepsize)
@@ -591,7 +649,8 @@ def run_custom_basinhopping(one_sided_mst, not_mst, edges, highD_dist_matrix):
             best_nr_of_links = nr_of_links
         else:
             cutoff = exp((new_corr-best_correlation)/temperature)
-            random_number = np.random.random()
+            # random_number = np.random.random()
+            random_number = 0.3
             # print("accept if cutoff > random_number?: " + str(cutoff) + ' > ' + str(random_number))
             if cutoff > random_number:
                 # print("  => STILL ACCEPTED")
@@ -607,45 +666,45 @@ def run_custom_basinhopping(one_sided_mst, not_mst, edges, highD_dist_matrix):
     return best_nr_of_links, best_correlation, xs, ys, dists
 
 
-def run_basinhopping(one_sided_mst, not_mst, edges, highD_dist_matrix):
-    global xs, ys, dists
-    xs = []
-    ys = []
-    dists = []
-    initial_temperature = 1
-    min_links = int(np.sum(one_sided_mst))
-    max_links = int(np.sum(not_mst))
-    initial_stepsize = int((max_links - min_links) / 100)
-
-    def cost_function(nr_of_links):
-        nr_of_links = int(nr_of_links)
-        adj = add_unit_edges_to_matrix(one_sided_mst, edges[:nr_of_links])
-        dist = shortest_path(adj, method='D', directed=False, unweighted=True)
-        #         dist = dijkstra(adj, directed=False, unweighted=True)
-        #         dist = bellman_ford(adj, directed=False)
-        #         dist = johnson(adj, directed=False)
-        #         dist = floyd_warshall(adj, directed=False)
-        result = np.corrcoef(dist.flatten(), highD_dist_matrix.flatten())[0][1]
-        xs.append(nr_of_links)
-        ys.append(result)
-        dists.append(dist)
-        return 1 - result
-
-    #     minimizer_kwargs = {'args':{"one_sided_mst": one_sided_mst}}
-    minimizer_kwargs = {'method': 'L-BFGS-B'}
-    result = optimize.basinhopping(
-        cost_function,
-        min_links,
-        disp=False,
-        #                     T=temperature,
-        #                     stepsize=stepsize,
-        #                     interval=100,
-        #                     niter=1000,
-        minimizer_kwargs=minimizer_kwargs,
-        take_step=MyTakeStep(initial_stepsize=initial_stepsize, initial_temperature=initial_temperature,
-                             max_links=max_links)
-    )
-    return [result, xs, ys, dists]
+# def run_basinhopping(one_sided_mst, not_mst, edges, highD_dist_matrix):
+#     global xs, ys, dists
+#     xs = []
+#     ys = []
+#     dists = []
+#     initial_temperature = 1
+#     min_links = int(np.sum(one_sided_mst))
+#     max_links = int(np.sum(not_mst))
+#     initial_stepsize = int((max_links - min_links) / 100)
+#
+#     def cost_function(nr_of_links):
+#         nr_of_links = int(nr_of_links)
+#         adj = add_unit_edges_to_matrix(one_sided_mst, edges[:nr_of_links])
+#         dist = shortest_path(adj, method='D', directed=False, unweighted=True)
+#         #         dist = dijkstra(adj, directed=False, unweighted=True)
+#         #         dist = bellman_ford(adj, directed=False)
+#         #         dist = johnson(adj, directed=False)
+#         #         dist = floyd_warshall(adj, directed=False)
+#         result = np.corrcoef(dist.flatten(), highD_dist_matrix.flatten())[0][1]
+#         xs.append(nr_of_links)
+#         ys.append(result)
+#         dists.append(dist)
+#         return 1 - result
+#
+#     #     minimizer_kwargs = {'args':{"one_sided_mst": one_sided_mst}}
+#     minimizer_kwargs = {'method': 'L-BFGS-B'}
+#     result = optimize.basinhopping(
+#         cost_function,
+#         min_links,
+#         disp=False,
+#         #                     T=temperature,
+#         #                     stepsize=stepsize,
+#         #                     interval=100,
+#         #                     niter=1000,
+#         minimizer_kwargs=minimizer_kwargs,
+#         take_step=MyTakeStep(initial_stepsize=initial_stepsize, initial_temperature=initial_temperature,
+#                              max_links=max_links)
+#     )
+#     return [result, xs, ys, dists]
 
 
 def create_final_unit_adj(one_sided_mst, edges, nr_of_links_to_add):
@@ -653,13 +712,12 @@ def create_final_unit_adj(one_sided_mst, edges, nr_of_links_to_add):
 
 
 # RUN STAD
-
-
 @click.command()
 @click.argument('dataset', type=click.Choice(['circles', 'horse', 'simulated', 'barcelona'], case_sensitive=False))
 @click.option('--nr_bins', default=5)
 @click.option('--lens/--no-lens', 'use_lens', default=False)
 def main(dataset, nr_bins, use_lens):
+    start = datetime.datetime.now()
     original_highD_dist_matrix, lens_data, features = load_testdata(dataset)
 
     if use_lens and len(lens_data) > 0:
@@ -687,16 +745,45 @@ def main(dataset, nr_bins, use_lens):
     print("Final correlation: " + str(best_y))
     g = ig.Graph.Weighted_Adjacency(list(final_weighted_adj))
 
+    stop = datetime.datetime.now()
+    time_delta = stop - start
+    print(time_delta)
+
+    # create_gephi_files(g, dataset, features)
+
+    my_d = []
+    counter = 0
+    for d in zip(xs,ys):
+        new_d = {}
+        new_d['x'] = d[0]
+        new_d['y'] = d[1]
+        new_d['i'] = counter
+        my_d.append(new_d)
+        counter += 1
+
+    # pn.Column(
+    #     "# QA plots for " + dataset,
+    #     "Number of tested positions: " + str(len(xs)) + "<br/>" +
+    #     "Number of links in mst: " + str(np.sum(one_sided_mst)) + "<br/>" +
+    #     "Number of links added: " + str(best_x) + "<br/>" +
+    #     "Number of links final: " + str(np.sum(final_unit_adj)) + "<br/>" +
+    #     "Final correlation: <b>" + "{:.2f}".format(best_y) + "</b>",
+    #     plot_qa(one_sided_mst,not_mst,final_unit_adj,final_weighted_adj,highD_dist_matrix,best_x,best_y,distances,xs,ys),
+    #     draw_stad(g, features)
+    # ).show()
     pn.Column(
-        "# QA plots for " + dataset,
-        "Number of tested positions: " + str(len(xs)) + "<br/>" +
-        "Number of links in mst: " + str(np.sum(one_sided_mst)) + "<br/>" +
-        "Number of links added: " + str(best_x) + "<br/>" +
         "Number of links final: " + str(np.sum(final_unit_adj)) + "<br/>" +
         "Final correlation: <b>" + "{:.2f}".format(best_y) + "</b>",
-        plot_qa(one_sided_mst,not_mst,final_unit_adj,final_weighted_adj,highD_dist_matrix,best_x,best_y,distances,xs,ys),
-        draw_stad(g, lens_data, features)
+        plot_trend_vega(my_d),
+        pn.Row(
+            plot_trend('scatter', 'nr_of_links', 'correlation', xs, ys, "Correlation vs nr links", best_x, 'vertical'),
+            plot_trend('scatter', 'iteration', 'correlation', range(0, len(ys)), ys,
+                       "Evolution of correlation (Should stabilise to maximum)", best_y, 'horizontal'),
+            plot_trend('scatter', 'iteration', 'nr_of_links', range(0, len(xs)), xs,
+                       "Evolution of nr of links (Should stabilise)", best_x, 'horizontal')
+        )
     ).show()
+
 
 if __name__ == '__main__':
     main()
