@@ -68,7 +68,7 @@ def plot_trend_vega(d):
           "mark": {"type": "circle", "tooltip": {"data": "content"}},
           "encoding": {
             "x": {"field": "x", "type": "quantitative"},
-            "y": {"field": "i", "type": "quantitative", "title": "epoch"},
+            "y": {"field": "epoch", "type": "quantitative", "title": "epoch"},
             "color": {"field": "colour",
               "scale": {
                 "domain": ["accepted", "still-accepted", "rejected"],
@@ -413,9 +413,9 @@ def load_testdata(dataset):
 
         sample = flatten(sample)
 
-        x_min = min(sample[0])
-        x_max = max(sample[0])
-        lens = list(map(lambda x: normalise_number_between_0_and_255(x[0], x_min, x_max), sample))
+        x_min = min(sample[2])
+        x_max = max(sample[2])
+        lens = list(map(lambda x: normalise_number_between_0_and_255(x[2], x_min, x_max), sample))
         features = {
             'lens': lens
         }
@@ -600,11 +600,22 @@ def add_unit_edges_to_matrix(adj_m, edges):
 #         return nr_of_links
 
 
-def cost_function(nr_of_links, one_sided_mst, edges, highD_dist_matrix):
+def cost_function(nr_of_links, one_sided_mst, edges, distances, highD_dist_matrix):
     adj = add_unit_edges_to_matrix(one_sided_mst, edges[:nr_of_links])
     dist = shortest_path(adj, method="D", directed=False, unweighted=True)
     corr = np.corrcoef(dist.flatten(), highD_dist_matrix.flatten())[0][1]
-    return corr, dist
+
+    ### Add ratio
+    nominator = np.sum(list(map(lambda x: 1-x, distances[:nr_of_links])))
+    denominator = 1 + np.sum(distances[:nr_of_links])
+    if denominator == 0:
+        ratio = 1
+    else:
+        ratio = nominator / denominator
+
+    corrected_corr = corr * ratio
+
+    return corrected_corr, corr, dist
 
 
 def take_step(previous_nr_of_links, max_links, temperature, more_links):
@@ -618,78 +629,70 @@ def take_step(previous_nr_of_links, max_links, temperature, more_links):
 
     nr_of_links = int(previous_nr_of_links + (random_jump_factor * stepsize))
     if nr_of_links < 0:
-        nr_of_links = 0
+        nr_of_links = int(0.1*max_links) # if just 0, we might get stuck here
     elif nr_of_links > max_links:
-        nr_of_links = max_links
+        nr_of_links = int(0.9*max_links) # if just max_links, we might get stuck there
 
     return nr_of_links
 
 
-def run_custom_basinhopping(one_sided_mst, not_mst, edges, highD_dist_matrix):
-    # global xs, ys, dists
+def run_custom_basinhopping(one_sided_mst, not_mst, edges, distances, highD_dist_matrix, use_corrected):
     xs = []
     ys = []
+
     decision_colours = []
-    tmp_best_correlations = []
+    tmp_best_results = []
     directions = [] # true if more, false if less
     dists = []
     max_links = int(np.sum(not_mst))
-    best_correlation = 0
+    best_result = 0
     best_nr_of_links = 0
 
-    tmp_best_correlations.append(best_correlation)
+    tmp_best_results.append(best_result)
     directions.append(True)
 
     temperatures = []
     nr_iterations = 100
     for i in range(1, nr_iterations):
         temperatures.append((log10(nr_iterations)-log10(i))/log10(nr_iterations))
-        # temperatures.append((5-log(i))/5)
-    # temperatures = list(map(lambda x:(4.596-log(x))/4.596, range(1,100)))
 
-    # previous_nr_of_links = 0
     previous_nr_of_links = int(max_links/10)
     for temperature in temperatures:
-        # stepsize = int(max_links * temperature)
-        # nr_of_links = take_step(0, max_links, stepsize)
         direction = directions[-1]
         nr_of_links = take_step(previous_nr_of_links, max_links, temperature, direction)
         previous_nr_of_links = nr_of_links
-        # print("nr_of_links: " + str(nr_of_links))
-        # print("correlation: " + str(best_correlation))
 
-        new_corr, dist = cost_function(nr_of_links, one_sided_mst, edges, highD_dist_matrix)
-        print(str(new_corr) + "\t" + str(best_correlation))
-        if new_corr > best_correlation:
-            print("  => ACCEPTED")
-            best_correlation = new_corr
+        new_corrected_corr, new_corr, dist = cost_function(nr_of_links, one_sided_mst, edges, distances, highD_dist_matrix)
+
+        if use_corrected:
+            new_result = new_corrected_corr
+        else:
+            new_result = new_corr
+
+        if new_result > best_result:
+            best_result = new_result
             best_nr_of_links = nr_of_links
             decision_colours.append('accepted')
-            directions.append(directions[-1])
+            directions.append(directions[-1]) # if we're going in the right direction, keep going in that direction
 
         else:
-            cutoff = exp((new_corr-best_correlation)/temperature)
+            cutoff = exp((new_result-best_result)/temperature)
             random_number = np.random.random()
-            # random_number = 0.3
-            print("accept if cutoff > random_number?: " + str(cutoff) + ' > ' + str(random_number))
-            # if cutoff > random_number:
-            if cutoff < random_number:
-                print("  => STILL ACCEPTED")
+            if cutoff > random_number:
                 directions.append(directions[-1])
-                best_correlation = new_corr
+                best_result = new_result
                 best_nr_of_links = nr_of_links
                 decision_colours.append('still-accepted')
             else:
-                print("  => REJECTED")
                 directions.append(not directions[-1])
                 decision_colours.append('rejected')
 
         xs.append(nr_of_links)
         ys.append(new_corr)
         dists.append(dist)
-        tmp_best_correlations.append(best_correlation)
+        tmp_best_results.append(best_result)
 
-    return best_nr_of_links, best_correlation, xs, ys, dists, decision_colours, tmp_best_correlations, directions
+    return best_nr_of_links, best_result, xs, ys, dists, decision_colours, tmp_best_results, directions
 
 
 # def run_basinhopping(one_sided_mst, not_mst, edges, highD_dist_matrix):
@@ -742,7 +745,8 @@ def create_final_unit_adj(one_sided_mst, edges, nr_of_links_to_add):
 @click.argument('dataset', type=click.Choice(['circles', 'horse', 'simulated', 'barcelona'], case_sensitive=False))
 @click.option('--nr_bins', default=5)
 @click.option('--lens/--no-lens', 'use_lens', default=False)
-def main(dataset, nr_bins, use_lens):
+@click.option('--corrected/--uncorrected', 'use_corrected', default=True)
+def main(dataset, nr_bins, use_lens, use_corrected):
     start = datetime.datetime.now()
     original_highD_dist_matrix, lens_data, features = load_testdata(dataset)
 
@@ -756,12 +760,9 @@ def main(dataset, nr_bins, use_lens):
     one_sided_mst = np.where(triu_mask(mst, k=1), mst, 0)
     not_mst = masked_edges(highD_dist_matrix, mst == 0)
     edges, distances = ordered_edges(highD_dist_matrix, not_mst)  # We'll need distances later for STAD-R
-    best_nr_of_links, best_correlation, xs, ys, dists, decision_colours, tmp_best_correlations, directions = run_custom_basinhopping(one_sided_mst, not_mst, edges, original_highD_dist_matrix)
+    best_nr_of_links, best_correlation, xs, ys, dists, decision_colours, tmp_best_correlations, directions = run_custom_basinhopping(one_sided_mst, not_mst, edges, distances, original_highD_dist_matrix, use_corrected)
     final_unit_adj = create_final_unit_adj(one_sided_mst, edges, best_nr_of_links)
-    # result, xs, ys, dists = run_basinhopping(one_sided_mst, not_mst, edges, highD_dist_matrix)
-    # final_unit_adj = create_final_unit_adj(one_sided_mst, edges, int(result['x'][0]))
     final_weighted_adj = np.where(final_unit_adj == 1, original_highD_dist_matrix, 0)
-    # final_weighted_adj = np.where(one_sided_mst == 1, original_highD_dist_matrix, 0)
     best_x = best_nr_of_links
     best_y = best_correlation
     print("Number of tested positions: " + str(len(xs)))
@@ -778,17 +779,16 @@ def main(dataset, nr_bins, use_lens):
     # create_gephi_files(g, dataset, features)
 
     my_d = []
-    counter = 0
-    for d in zip(xs,ys,decision_colours, tmp_best_correlations, directions):
+    epochs = range(0, len(xs))
+    for d in zip(xs,ys,decision_colours, tmp_best_correlations, directions, epochs):
         new_d = {}
         new_d['x'] = d[0]
         new_d['y'] = d[1]
-        new_d['i'] = counter
+        new_d['epoch'] = d[5]
         new_d['colour'] = d[2]
         new_d['tmp_best_correlation'] = d[3]
         new_d['more_links'] = d[4]
         my_d.append(new_d)
-        counter += 1
 
     pn.Column(
         "# QA plots for " + dataset,
