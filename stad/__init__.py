@@ -51,16 +51,15 @@ def plot_trend(plot_type, xlabel, ylabel, xs, ys, title, line_position=None, lin
 def plot_trend_vega(d):
     return pn.pane.Vega({
       "$schema": "https://vega.github.io/schema/vega-lite/v4.json",
-      "width": 300,
-      "height": 300,
+      "width": 500,
+      "height": 500,
       "data": {"values": d},
       "layer": [
         {
-          "mark": {"type": "circle", "tooltip": {"data": "content"}},
+          "mark": {"type": "line", "tooltip": {"data": "content"}},
           "encoding": {
-            "x": {"field": "x", "type": "quantitative"},
-            "y": {"field": "y", "type": "quantitative"},
-            "color": {"value": "#1b9e77"},
+            "x": {"field": "x", "type": "quantitative", "title": "nr of links"},
+            "y": {"field": "y", "type": "quantitative", "title": "correlation"},
             "opacity": {"value": 0.5}
 
           }
@@ -69,9 +68,12 @@ def plot_trend_vega(d):
           "mark": {"type": "circle", "tooltip": {"data": "content"}},
           "encoding": {
             "x": {"field": "x", "type": "quantitative"},
-            "y": {"field": "i", "type": "quantitative"},
-            "color": {"value": "#7570b3"},
-            "opacity": {"value": 0.5}
+            "y": {"field": "i", "type": "quantitative", "title": "epoch"},
+            "color": {"field": "colour",
+              "scale": {
+                "domain": ["accepted", "still-accepted", "rejected"],
+                "range": ["#4daf4a", "#ff7f00", "#e41a1c"]}},
+            "opacity": {"value": 0.8}
           }
         }
       ],
@@ -517,7 +519,7 @@ def create_lensed_distmatrix_1step(matrix, assigned_bins):
 def create_mst(dist_matrix):
     """For a given distance matrix, returns the unit-distance MST."""
     # Use toarray because we want a regular nxn matrix, not the scipy sparse matrix.
-    np.random.seed(1)
+    # np.random.seed(1)
     mst = minimum_spanning_tree(dist_matrix).toarray()
     # Set every edge weight to 1.
     mst = np.where(mst > 0, 1, 0)
@@ -599,19 +601,27 @@ def add_unit_edges_to_matrix(adj_m, edges):
 
 
 def cost_function(nr_of_links, one_sided_mst, edges, highD_dist_matrix):
-    nr_of_links = int(nr_of_links)
     adj = add_unit_edges_to_matrix(one_sided_mst, edges[:nr_of_links])
     dist = shortest_path(adj, method="D", directed=False, unweighted=True)
     corr = np.corrcoef(dist.flatten(), highD_dist_matrix.flatten())[0][1]
     return corr, dist
 
 
-def take_step(previous_nr_of_links, max_links, stepsize):
-    nr_of_links = int(np.random.normal(previous_nr_of_links, stepsize))
+def take_step(previous_nr_of_links, max_links, temperature, more_links):
+    stepsize = int(max_links * temperature)
+
+    abs_random_jump_factor = np.abs(np.random.normal())
+    if more_links:
+        random_jump_factor = abs_random_jump_factor
+    else:
+        random_jump_factor = -abs_random_jump_factor
+
+    nr_of_links = int(previous_nr_of_links + (random_jump_factor * stepsize))
     if nr_of_links < 0:
         nr_of_links = 0
     elif nr_of_links > max_links:
         nr_of_links = max_links
+
     return nr_of_links
 
 
@@ -619,10 +629,16 @@ def run_custom_basinhopping(one_sided_mst, not_mst, edges, highD_dist_matrix):
     # global xs, ys, dists
     xs = []
     ys = []
+    decision_colours = []
+    tmp_best_correlations = []
+    directions = [] # true if more, false if less
     dists = []
     max_links = int(np.sum(not_mst))
     best_correlation = 0
     best_nr_of_links = 0
+
+    tmp_best_correlations.append(best_correlation)
+    directions.append(True)
 
     temperatures = []
     nr_iterations = 100
@@ -631,39 +647,49 @@ def run_custom_basinhopping(one_sided_mst, not_mst, edges, highD_dist_matrix):
         # temperatures.append((5-log(i))/5)
     # temperatures = list(map(lambda x:(4.596-log(x))/4.596, range(1,100)))
 
+    # previous_nr_of_links = 0
+    previous_nr_of_links = int(max_links/10)
     for temperature in temperatures:
-        # print("-----------")
-        stepsize = int(max_links * temperature)
-        print(stepsize)
-        # print("temperature: " + str(temperature))
-        # print("stepsize: " + str(stepsize))
-        nr_of_links = take_step(0, max_links, stepsize)
+        # stepsize = int(max_links * temperature)
+        # nr_of_links = take_step(0, max_links, stepsize)
+        direction = directions[-1]
+        nr_of_links = take_step(previous_nr_of_links, max_links, temperature, direction)
+        previous_nr_of_links = nr_of_links
         # print("nr_of_links: " + str(nr_of_links))
         # print("correlation: " + str(best_correlation))
 
         new_corr, dist = cost_function(nr_of_links, one_sided_mst, edges, highD_dist_matrix)
-        # print("new correlation: " + str(new_corr))
-        if ( new_corr > best_correlation ):
-            # print("  => ACCEPTED")
+        print(str(new_corr) + "\t" + str(best_correlation))
+        if new_corr > best_correlation:
+            print("  => ACCEPTED")
             best_correlation = new_corr
             best_nr_of_links = nr_of_links
+            decision_colours.append('accepted')
+            directions.append(directions[-1])
+
         else:
             cutoff = exp((new_corr-best_correlation)/temperature)
-            # random_number = np.random.random()
-            random_number = 0.3
-            # print("accept if cutoff > random_number?: " + str(cutoff) + ' > ' + str(random_number))
-            if cutoff > random_number:
-                # print("  => STILL ACCEPTED")
+            random_number = np.random.random()
+            # random_number = 0.3
+            print("accept if cutoff > random_number?: " + str(cutoff) + ' > ' + str(random_number))
+            # if cutoff > random_number:
+            if cutoff < random_number:
+                print("  => STILL ACCEPTED")
+                directions.append(directions[-1])
                 best_correlation = new_corr
                 best_nr_of_links = nr_of_links
-            # else:
-                # print("  => REJECTED")
+                decision_colours.append('still-accepted')
+            else:
+                print("  => REJECTED")
+                directions.append(not directions[-1])
+                decision_colours.append('rejected')
 
         xs.append(nr_of_links)
         ys.append(new_corr)
         dists.append(dist)
+        tmp_best_correlations.append(best_correlation)
 
-    return best_nr_of_links, best_correlation, xs, ys, dists
+    return best_nr_of_links, best_correlation, xs, ys, dists, decision_colours, tmp_best_correlations, directions
 
 
 # def run_basinhopping(one_sided_mst, not_mst, edges, highD_dist_matrix):
@@ -730,7 +756,7 @@ def main(dataset, nr_bins, use_lens):
     one_sided_mst = np.where(triu_mask(mst, k=1), mst, 0)
     not_mst = masked_edges(highD_dist_matrix, mst == 0)
     edges, distances = ordered_edges(highD_dist_matrix, not_mst)  # We'll need distances later for STAD-R
-    best_nr_of_links, best_correlation, xs, ys, dists = run_custom_basinhopping(one_sided_mst, not_mst, edges, original_highD_dist_matrix)
+    best_nr_of_links, best_correlation, xs, ys, dists, decision_colours, tmp_best_correlations, directions = run_custom_basinhopping(one_sided_mst, not_mst, edges, original_highD_dist_matrix)
     final_unit_adj = create_final_unit_adj(one_sided_mst, edges, best_nr_of_links)
     # result, xs, ys, dists = run_basinhopping(one_sided_mst, not_mst, edges, highD_dist_matrix)
     # final_unit_adj = create_final_unit_adj(one_sided_mst, edges, int(result['x'][0]))
@@ -753,35 +779,27 @@ def main(dataset, nr_bins, use_lens):
 
     my_d = []
     counter = 0
-    for d in zip(xs,ys):
+    for d in zip(xs,ys,decision_colours, tmp_best_correlations, directions):
         new_d = {}
         new_d['x'] = d[0]
         new_d['y'] = d[1]
         new_d['i'] = counter
+        new_d['colour'] = d[2]
+        new_d['tmp_best_correlation'] = d[3]
+        new_d['more_links'] = d[4]
         my_d.append(new_d)
         counter += 1
 
-    # pn.Column(
-    #     "# QA plots for " + dataset,
-    #     "Number of tested positions: " + str(len(xs)) + "<br/>" +
-    #     "Number of links in mst: " + str(np.sum(one_sided_mst)) + "<br/>" +
-    #     "Number of links added: " + str(best_x) + "<br/>" +
-    #     "Number of links final: " + str(np.sum(final_unit_adj)) + "<br/>" +
-    #     "Final correlation: <b>" + "{:.2f}".format(best_y) + "</b>",
-    #     plot_qa(one_sided_mst,not_mst,final_unit_adj,final_weighted_adj,highD_dist_matrix,best_x,best_y,distances,xs,ys),
-    #     draw_stad(g, features)
-    # ).show()
     pn.Column(
+        "# QA plots for " + dataset,
+        "Number of tested positions: " + str(len(xs)) + "<br/>" +
+        "Number of links in mst: " + str(np.sum(one_sided_mst)) + "<br/>" +
+        "Number of links added: " + str(best_x) + "<br/>" +
         "Number of links final: " + str(np.sum(final_unit_adj)) + "<br/>" +
         "Final correlation: <b>" + "{:.2f}".format(best_y) + "</b>",
         plot_trend_vega(my_d),
-        pn.Row(
-            plot_trend('scatter', 'nr_of_links', 'correlation', xs, ys, "Correlation vs nr links", best_x, 'vertical'),
-            plot_trend('scatter', 'iteration', 'correlation', range(0, len(ys)), ys,
-                       "Evolution of correlation (Should stabilise to maximum)", best_y, 'horizontal'),
-            plot_trend('scatter', 'iteration', 'nr_of_links', range(0, len(xs)), xs,
-                       "Evolution of nr of links (Should stabilise)", best_x, 'horizontal')
-        )
+        plot_qa(one_sided_mst,not_mst,final_unit_adj,final_weighted_adj,highD_dist_matrix,best_x,best_y,distances,xs,ys),
+        draw_stad(g, features)
     ).show()
 
 
