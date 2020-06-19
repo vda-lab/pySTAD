@@ -58,7 +58,10 @@ def main(dataset, nr_bins, use_lens, use_corrected):
         my_d.append(new_d)
 
     pn.Column(
-        "# QA plots for " + dataset,
+        pn.pane.Markdown("# QA plots for " + dataset),
+        "Parameters:<br/>" +
+        "  - lens: " + str(use_lens) + "<br/>" +
+        "  - corrected: " + str(use_corrected) + "<br/>" +
         "Number of tested positions: " + str(len(xs)) + "<br/>" +
         "Number of links in mst: " + str(np.sum(one_sided_mst)) + "<br/>" +
         "Number of links added: " + str(best_x) + "<br/>" +

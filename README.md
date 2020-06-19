@@ -34,10 +34,14 @@ data = pd.read_csv(url, header=0)
 
 ## Extract the values we want to use in our distance, the lens, and optional features
 values = data[['x','y']].values.tolist()
-lens = data['hue'].map(lambda x:stad.hex_to_hsv(x)[0]).values
-xs = data['x'].values.tolist()
-ys = data['y'].values.tolist()
-hues = data['hue'].values.tolist()
+lens = data['hue'].map(lambda x: stad.hex_to_hsv(x)[0]).values
+features={
+    'x': data['x'].values.tolist(),
+    'y': data['y'].values.tolist(),
+    'colour': data['hue'].values.tolist()
+}
+highD_dist_matrix = stad.calculate_highD_dist_matrix(values)
+return (highD_dist_matrix, lens, features)
 
 ## Create the distance matrix in the high_dimensional space. This can be using
 ## cosine distance, euclidean, or any other.

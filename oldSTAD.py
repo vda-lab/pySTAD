@@ -307,7 +307,7 @@ def find_stad_optimum(dist_matrix, T=0.5, interval=100):
     print("Search space max: ", str(search_space[-1]))
 
     print("history_y: ", history_y)
-    
+
     minimizer_kwargs = {'args':{'mst':mst, 'non_mst':non_mst, 'cmdm':cmdm, 'dm_distances':dm_distances}}
     result = scipy.optimize.basinhopping(
                     objective_function, 0,

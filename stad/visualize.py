@@ -37,8 +37,8 @@ def plot_trend(plot_type, xlabel, ylabel, xs, ys, title, line_position=None, lin
 def plot_trend_vega(d):
     return pn.pane.Vega({
       "$schema": "https://vega.github.io/schema/vega-lite/v4.json",
-      "width": 500,
-      "height": 500,
+      "width": 300,
+      "height": 300,
       "data": {"values": d},
       "layer": [
         {
