@@ -21,4 +21,9 @@ setuptools.setup(
         "Topic :: Scientific/Engineering"
     ],
     python_requires='>=3',
+    install_requires=[
+        "python-igraph",
+        "panel",
+        "vega"
+    ]
 )
