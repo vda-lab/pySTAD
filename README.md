@@ -40,14 +40,12 @@ features={
     'y': data['y'].values.tolist(),
     'colour': data['hue'].values.tolist()
 }
-highD_dist_matrix = stad.calculate_highD_dist_matrix(values)
-return (highD_dist_matrix, lens, features)
 
 ## Create the distance matrix in the high_dimensional space. This can be using
 ## cosine distance, euclidean, or any other.
 highD_dist_matrix = stad.calculate_highD_dist_matrix(values)
 
 ## Run STAD and show the result
-g = stad.run_stad(highD_dist_matrix, lens=lens, features={'x':xs, 'y':ys, 'hue': hues})
+g = stad.run_stad(highD_dist_matrix, lens=lens, features=features)
 stad.draw_stad(g)
 ```
